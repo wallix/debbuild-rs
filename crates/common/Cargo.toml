@@ -1,0 +1,18 @@
+[package]
+name = "debbuild-rs-common"
+version = "0.1.0"
+description = "Debian control data, versions and relations, as dpkg reads them"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+indexmap.workspace = true
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

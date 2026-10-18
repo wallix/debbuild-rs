@@ -1,0 +1,26 @@
+[package]
+name = "debbuild-rs-install"
+version = "0.1.0"
+description = "debbuild-rs install: install staged packages into a root directory, the way dpkg does"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+debbuild-rs-common.workspace = true
+indexmap.workspace = true
+md-5.workspace = true
+nix = { workspace = true, features = ["dir", "fs", "user"] }
+sha2.workspace = true
+tar.workspace = true
+
+[features]
+# staged::hooks, for the tests of the H7 load windows
+test-hooks = []
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

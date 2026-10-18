@@ -1,0 +1,16 @@
+[package]
+name = "debbuild-rs-strip"
+version = "0.1.0"
+description = "debbuild-rs strip-nondeterminism: build timestamps normalized out of the files of a package tree, as strip-nondeterminism does"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+flate2.workspace = true
+indexmap.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

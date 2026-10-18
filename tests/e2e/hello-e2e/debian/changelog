@@ -1,0 +1,5 @@
+hello-e2e (1.0) unstable; urgency=medium
+
+  * End-to-end test package.
+
+ -- debbuild-rs <debbuild-rs@example.org>  Thu, 01 Jan 2026 00:00:00 +0000

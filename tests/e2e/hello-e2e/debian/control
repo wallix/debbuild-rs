@@ -1,0 +1,19 @@
+Source: hello-e2e
+Section: misc
+Priority: optional
+Maintainer: debbuild-rs <debbuild-rs@example.org>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: hello-e2e
+Architecture: any
+Depends: hello-e2e-data (= ${source:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: debbuild-rs end-to-end test program
+ Prints the greeting of hello-e2e-data.
+
+Package: hello-e2e-data
+Architecture: all
+Depends: ${misc:Depends}
+Description: debbuild-rs end-to-end test data
+ The greeting hello-e2e prints.

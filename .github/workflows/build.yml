@@ -1,0 +1,91 @@
+name: Build
+
+# The release archives, built natively on each architecture by build.sh in the pinned
+# build image, then run through the end-to-end gate on Debian 12 and 13.
+
+on:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        type: string
+        required: true
+      retention-days:
+        type: number
+        default: 7
+      verify-reproducible:
+        type: boolean
+        default: false
+      release-tag:
+        description: The version the binaries must report (vX.Y.Z), for a release
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-24.04
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/image
+        with:
+          target: debbuild-rs-build
+
+      - name: Build and package (linux-${{ matrix.arch }})
+        run: ./build.sh --docker --package ${{ inputs.verify-reproducible && '--verify' || '' }}
+
+      - name: Name the build manifest for its architecture
+        run: cp dist/debbuild-rs.sha256 dist/debbuild-rs-linux-${{ matrix.arch }}.build-info.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-linux-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            dist/debbuild-rs-linux-${{ matrix.arch }}.tar.gz
+            dist/debbuild-rs-linux-${{ matrix.arch }}.sha256
+            dist/debbuild-rs-linux-${{ matrix.arch }}.build-info.txt
+          if-no-files-found: error
+          overwrite: true
+          retention-days: ${{ inputs.retention-days }}
+
+  # The archives just uploaded, not a rebuild: what is tested is what ships.
+  e2e:
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        debian: [12, 13]
+    name: e2e (${{ matrix.arch }}, Debian ${{ matrix.debian }})
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    steps:
+      # No token in .git/config: this job runs a downloaded binary.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-prefix }}-linux-${{ matrix.arch }}-${{ github.sha }}
+          path: dist
+
+      - uses: ./.github/actions/image
+        with:
+          target: debian-${{ matrix.debian }}
+
+      - name: End-to-end
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: tests/e2e.sh --docker --debian=${{ matrix.debian }}

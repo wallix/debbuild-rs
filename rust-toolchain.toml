@@ -1,0 +1,6 @@
+# The toolchain of the build image (.devcontainer/nix/flake.nix pins the same channel).
+# The MSRV is Cargo.toml's rust-version, checked separately by CI.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

@@ -1,0 +1,162 @@
+name: Release
+
+# Releases are cut from the `release` branch, and tagged only once everything passed.
+#
+# Push the candidate to `release`, its tip the commit that bumps the version in
+# Cargo.toml and dates its CHANGELOG.md section. This workflow checks it, runs the quality
+# checks, builds the archives twice to require identical bytes, runs the end-to-end gate
+# on them with the version required, then fast-forwards `main` to the candidate, pushes
+# the vX.Y.Z tag and publishes the GitHub release. A failed candidate is fixed and pushed
+# to `release` again (--force-with-lease): no tag existed for it, so tags and `main` only
+# ever move forward.
+#
+# `release` writes into `main` through publish: protect it at least as strictly as main.
+
+on:
+  push:
+    branches: [release]
+
+# One candidate at a time, the newest. A cancel during publish can leave the tag pushed
+# without its release: every publish step is idempotent, re-run the failed jobs.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Refuse a candidate that is already released, has no dated CHANGELOG section or does
+  # not contain main, before anything compiles.
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.candidate.outputs.tag }}
+      main-sha: ${{ steps.candidate.outputs.main-sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check the candidate
+        id: candidate
+        run: |
+          set -euo pipefail
+          version=$(sed -nE '/^\[package\]/,/^\[/ s/^version = "(.*)"$/\1/p' Cargo.toml)
+          # Validated before it goes into a tag or $GITHUB_OUTPUT.
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$version'" >&2; exit 1; }
+          tag="v$version"
+          echo "candidate: $tag at $GITHUB_SHA"
+          # Exit status 2 is "no such tag"; anything else but 0 is a transport error.
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || rc=$?
+          case $rc in
+            0) echo "$tag is already released: bump the version in Cargo.toml" >&2; exit 1 ;;
+            2) ;;
+            *) echo "cannot reach origin to check $tag (git ls-remote exit $rc)" >&2; exit 1 ;;
+          esac
+          grep -qE "^## $(printf '%s' "$tag" | sed 's/\./\\./g') - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md ||
+            { echo "CHANGELOG.md has no dated '## $tag - YYYY-MM-DD' section" >&2; exit 1; }
+          ./release-notes.sh "$tag" >/dev/null
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          main_sha=$(git rev-parse origin/main)
+          git merge-base --is-ancestor "$main_sha" HEAD ||
+            { echo "the candidate does not contain main ($main_sha): rebase it" >&2; exit 1; }
+          {
+            echo "tag=$tag"
+            echo "main-sha=$main_sha"
+          } >>"$GITHUB_OUTPUT"
+
+  quality:
+    needs: [prepare]
+    uses: ./.github/workflows/quality.yml
+
+  build:
+    needs: [prepare]
+    uses: ./.github/workflows/build.yml
+    with:
+      artifact-prefix: release
+      retention-days: 3
+      verify-reproducible: true
+      release-tag: ${{ needs.prepare.outputs.tag }}
+
+  # The writes, in an order that never leaves a wrong tag: main first (a refused
+  # fast-forward means main moved, and nothing is published), then the tag, then the
+  # release.
+  publish:
+    needs: [prepare, quality, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      MAIN_SHA: ${{ needs.prepare.outputs.main-sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*-${{ github.sha }}
+          path: dist
+          merge-multiple: true
+
+      - name: Check the assets
+        run: |
+          set -euo pipefail
+          assets=()
+          for arch in x86_64 aarch64; do
+            for ext in tar.gz sha256 build-info.txt; do
+              a=dist/debbuild-rs-linux-$arch.$ext
+              [ -f "$a" ] || { echo "missing release asset: $a" >&2; exit 1; }
+              assets+=("$a")
+            done
+          done
+          (cd dist && for s in debbuild-rs-*.sha256; do sha256sum -c "$s"; done)
+          printf '%s\n' "${assets[@]}" >"$RUNNER_TEMP/assets.txt"
+
+      - name: Release notes
+        run: ./release-notes.sh "$TAG" >"$RUNNER_TEMP/release-notes.md"
+
+      - name: Fast-forward main to the candidate
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          now=$(git rev-parse origin/main)
+          if [ "$now" != "$MAIN_SHA" ] && [ "$now" != "$GITHUB_SHA" ]; then
+            echo "main moved from $MAIN_SHA to $now since the pipeline started: rebase and push release again" >&2
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/main"
+
+      - name: Push the tag
+        run: |
+          set -euo pipefail
+          rc=0
+          existing=$(git ls-remote --exit-code --tags origin "refs/tags/$TAG" | cut -f1) || rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || { echo "cannot reach origin to check $TAG (git ls-remote exit $rc)" >&2; exit 1; }
+          if [ -n "$existing" ]; then
+            [ "$existing" = "$GITHUB_SHA" ] || { echo "$TAG already exists at $existing" >&2; exit 1; }
+            exit 0
+          fi
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      # A draft first, so a partial upload is never published.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets <"$RUNNER_TEMP/assets.txt"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" --draft --title "$TAG" --verify-tag \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          gh release edit "$TAG" --draft=false

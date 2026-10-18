@@ -1,0 +1,83 @@
+[package]
+name = "debbuild-rs"
+version = "0.1.0"
+description = "Build Debian packages from their debian/rules into staged trees, pack them into .deb files and install them the way dpkg does"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Standalone workspace: never absorbed by an ancestor workspace, own lockfile.
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+debbuild-rs-build = { path = "crates/build" }
+debbuild-rs-check = { path = "crates/check" }
+debbuild-rs-common = { path = "crates/common" }
+debbuild-rs-install = { path = "crates/install" }
+debbuild-rs-pack = { path = "crates/pack" }
+debbuild-rs-strip = { path = "crates/strip" }
+flate2 = "1.1.10"
+indexmap = "2.14.2"
+liblzma = { version = "0.4.8", features = ["parallel", "static"] }
+md-5 = "0.11.0"
+nix = "0.31.3"
+rustix = { version = "1.1.5", features = ["fs"] }
+sha2 = "0.11.0"
+tar = { version = "0.4.46", default-features = false }
+tempfile = "3.27.0"
+zstd = { version = "0.14.3", features = ["zstdmt"] }
+# The musl builds' allocator: musl's own is slow, and serializes threads (as ripgrep and vk).
+tikv-jemallocator = "0.7.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+
+[[bin]]
+name = "debbuild-rs"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+debbuild-rs-build.workspace = true
+debbuild-rs-check.workspace = true
+debbuild-rs-install.workspace = true
+debbuild-rs-pack.workspace = true
+debbuild-rs-strip.workspace = true
+nix = { workspace = true, features = ["fs"] }
+
+[target.'cfg(target_env = "musl")'.dependencies]
+tikv-jemallocator.workspace = true
+
+[dev-dependencies]
+debbuild-rs-common.workspace = true
+debbuild-rs-install = { workspace = true, features = ["test-hooks"] }
+flate2.workspace = true
+md-5.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+# The release binary: stripped (no build paths or symbols to vary), one codegen unit.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

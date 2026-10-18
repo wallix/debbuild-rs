@@ -1,0 +1,20 @@
+[package]
+name = "debbuild-rs-check"
+version = "0.1.0"
+description = "debbuild-rs diff-stage and check: compare staged trees, and installations against dpkg"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+debbuild-rs-common.workspace = true
+debbuild-rs-pack.workspace = true
+md-5.workspace = true
+nix = { workspace = true, features = ["fs", "user"] }
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

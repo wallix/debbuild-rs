@@ -1,0 +1,20 @@
+[package]
+name = "debbuild-rs-pack"
+version = "0.1.0"
+description = "debbuild-rs pack: staged package trees into .deb files, as dpkg-deb --build does"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+debbuild-rs-common.workspace = true
+flate2.workspace = true
+liblzma.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+zstd.workspace = true
+
+[lints]
+workspace = true

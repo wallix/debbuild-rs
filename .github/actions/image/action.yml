@@ -1,0 +1,43 @@
+name: Image
+description: >
+  Build a stage of .devcontainer/Dockerfile as the debbuild-rs-<target> image the scripts
+  run in (with DEBBUILD_RS_PREBUILT_IMAGES set). The build image keeps a layer cache keyed
+  on .devcontainer/; the Debian images are built fresh, with the current packages of
+  their release.
+
+inputs:
+  target:
+    description: The Dockerfile stage
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache the layers
+      if: inputs.target == 'debbuild-rs-build'
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/buildx-cache
+        key: buildx-${{ runner.arch }}-${{ hashFiles('.devcontainer/**') }}
+        restore-keys: buildx-${{ runner.arch }}-
+
+    - name: Build ${{ inputs.target }}
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        CACHE: ${{ runner.temp }}/buildx-cache
+      run: |
+        set -euo pipefail
+        if [ "$TARGET" = debbuild-rs-build ]; then
+          # The default builder cannot export a cache; docker-container can. buildx
+          # writes a new export each time: moving it over the old one keeps it bounded.
+          docker buildx create --name debbuild-rs --driver docker-container --use >/dev/null
+          docker buildx build --load --target "$TARGET" -t "debbuild-rs-$TARGET" \
+            --cache-from "type=local,src=$CACHE" --cache-to "type=local,dest=$CACHE-new,mode=max" \
+            -f .devcontainer/Dockerfile .devcontainer
+          rm -rf "$CACHE"
+          mv "$CACHE-new" "$CACHE"
+        else
+          docker build --target "$TARGET" -t "debbuild-rs-$TARGET" -f .devcontainer/Dockerfile .devcontainer
+        fi
+        echo DEBBUILD_RS_PREBUILT_IMAGES=1 >>"$GITHUB_ENV"

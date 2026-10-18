@@ -1,0 +1,19 @@
+# liblzma-sys and zstd-sys compile C in their build scripts. The build image
+# (.devcontainer/Dockerfile) carries two compilers: the host glibc gcc cargo needs for
+# build scripts and proc-macros, and a musl cross gcc for the target. cc-rs would look for
+# `musl-gcc`; name the cross tools it should use instead, and make the same cross gcc
+# rustc's linker driver so no musl link goes through the host cc.
+#
+# [env] applies workspace-wide, but cc-rs reads CC_<triple>/AR_<triple> only for that
+# target, so host `cargo build` and `cargo test` are unaffected.
+[env]
+CC_x86_64_unknown_linux_musl = "x86_64-unknown-linux-musl-cc"
+AR_x86_64_unknown_linux_musl = "x86_64-unknown-linux-musl-ar"
+CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-cc"
+AR_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-ar"
+
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-unknown-linux-musl-cc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-unknown-linux-musl-cc"

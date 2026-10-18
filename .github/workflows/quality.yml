@@ -1,0 +1,73 @@
+name: Quality
+
+# The source checks and the tests, called by ci.yml and release.yml so that a release is
+# gated on the same checks. All of them run in the pinned build image; the tests then run
+# on Debian 12 and 13 (test.sh).
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fmt
+            cmd: ./check.sh --docker fmt --check
+          - name: clippy
+            cmd: ./check.sh --docker clippy
+          - name: audit
+            cmd: ./check.sh --docker audit
+          - name: test
+            cmd: ./test.sh --docker
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/image
+        with:
+          target: debbuild-rs-build
+
+      - if: matrix.name == 'test'
+        uses: ./.github/actions/image
+        with:
+          target: debian-12
+
+      - if: matrix.name == 'test'
+        uses: ./.github/actions/image
+        with:
+          target: debian-13
+
+      # Per-check keys: fmt's empty target/ never replaces a compiled one.
+      - name: Cache cargo home and target
+        uses: actions/cache@v6
+        with:
+          path: |
+            target/.cargo-home/registry
+            target/.cargo-home/git
+            target/debug
+            target/*-unknown-linux-musl/debug
+          key: cargo-${{ matrix.name }}-${{ hashFiles('Cargo.lock', '.devcontainer/nix/flake.lock') }}
+          restore-keys: cargo-${{ matrix.name }}-
+
+      - name: ${{ matrix.name }}
+        run: ${{ matrix.cmd }}
+
+  # The oldest Rust the crates support (rust-version), outside the pinned image.
+  msrv:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build with the MSRV
+        run: |
+          set -euo pipefail
+          msrv=$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^rust-version = "(.*)"$/\1/p' Cargo.toml)
+          rustup toolchain install "$msrv" --profile minimal
+          cargo "+$msrv" build --locked --workspace
