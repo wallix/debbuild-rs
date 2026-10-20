@@ -1,6 +1,6 @@
 [package]
 name = "debbuild-rs-install"
-version = "0.1.0"
+version = "0.2.0"
 description = "debbuild-rs install: install staged packages into a root directory, the way dpkg does"
 edition.workspace = true
 license.workspace = true

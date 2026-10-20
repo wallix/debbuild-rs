@@ -3,7 +3,7 @@
 Each release has a `## vX.Y.Z - YYYY-MM-DD` section: the release workflow requires it and
 publishes it as the release notes. Changes waiting for a release go under `## Unreleased`.
 
-## Unreleased
+## v0.2.0 - 2026-10-20
 
 Breaking:
 

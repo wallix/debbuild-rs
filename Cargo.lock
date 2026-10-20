@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "debbuild-rs-build",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-build"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "debbuild-rs-common",
  "nix",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-check"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "debbuild-rs-common",
  "debbuild-rs-pack",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "indexmap",
  "rustix",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-install"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "debbuild-rs-common",
  "indexmap",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-pack"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "debbuild-rs-common",
  "flate2",
@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "debbuild-rs-strip"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "indexmap",

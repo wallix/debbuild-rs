@@ -1,6 +1,6 @@
 [package]
 name = "debbuild-rs"
-version = "0.1.0"
+version = "0.2.0"
 description = "Build Debian packages from their debian/rules into staged trees, pack them into .deb files and install them the way dpkg does"
 edition.workspace = true
 license.workspace = true

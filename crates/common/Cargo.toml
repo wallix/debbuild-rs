@@ -1,6 +1,6 @@
 [package]
 name = "debbuild-rs-common"
-version = "0.1.0"
+version = "0.2.0"
 description = "Debian control data, versions and relations, as dpkg reads them"
 edition.workspace = true
 license.workspace = true
