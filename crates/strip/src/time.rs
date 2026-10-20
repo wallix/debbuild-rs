@@ -1,4 +1,7 @@
 //! UTC calendar arithmetic for the timestamps the handlers write and read.
+//!
+//! Dates are those of the proleptic Gregorian calendar, before the year 1 too: a
+//! difference from strip-nondeterminism, which writes wrong dates there.
 
 /// A UTC date and time, to the second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,10 +95,10 @@ impl Utc {
     }
 
     /// The MS-DOS time and date words of zip headers (two-second resolution, years
-    /// 1980 to 2107 kept in range).
+    /// before 1980 as 1980, later ones modulo 128 years from 1980).
     #[must_use]
     pub fn dos(&self) -> (u16, u16) {
-        let year = u16::try_from(self.year.clamp(1980, 2107).saturating_sub(1980)).unwrap_or(0);
+        let year = u16::try_from(self.year.max(1980).saturating_sub(1980) & 0x7f).unwrap_or(0);
         let w = |n: u32| u16::try_from(n).unwrap_or(0);
         let time = (w(self.hour) << 11) | (w(self.minute) << 5) | (w(self.second) >> 1);
         let date = (year << 9) | (w(self.month) << 5) | w(self.day);
@@ -139,5 +142,8 @@ mod tests {
         // 2026-01-01 00:00:00 and 2025-12-31 23:59:58, as strip-nondeterminism writes them
         assert_eq!(Utc::from_unix(1_767_225_600).dos(), (0x0000, 0x5c21));
         assert_eq!(Utc::from_unix(1_767_225_598).dos(), (0xbf7d, 0x5b9f));
+        // 2108-01-01 and 2286-11-20 17:46:39 wrap around
+        assert_eq!(Utc::from_unix(4_354_819_200).dos(), (0, 0x21));
+        assert_eq!(Utc::from_unix(9_999_999_999).dos(), (0x8dd3, 0x6574));
     }
 }

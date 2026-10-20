@@ -46,18 +46,21 @@ RUN t="$(uname -m)-unknown-linux-musl" \
  && rm -rf /tmp/cargo
 
 # The Debian side: dpkg-dev and debhelper for staging, fakeroot, build-essential for the
-# C package of the end-to-end run (its -dbgsym), file for its checks, and python3 with
-# add-determinism for the .pyc tests.
+# C package of the end-to-end run (its -dbgsym), file for its checks, python3 with
+# add-determinism for the .pyc tests, and strip-nondeterminism's command line with
+# libarchive-cpio-perl (a Recommends its cpio handler needs) for the strip tests.
 FROM debian:12-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS debian-12
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential debhelper dpkg-dev fakeroot file python3 \
+      build-essential debhelper dpkg-dev fakeroot file libarchive-cpio-perl python3 \
+      strip-nondeterminism \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=add-determinism /opt/add-determinism/bin/add-det /usr/local/bin/add-det
 
 FROM debian:13-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS debian-13
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential debhelper dpkg-dev fakeroot file python3 \
+      build-essential debhelper dpkg-dev fakeroot file libarchive-cpio-perl python3 \
+      strip-nondeterminism \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=add-determinism /opt/add-determinism/bin/add-det /usr/local/bin/add-det

@@ -4,8 +4,9 @@
 //! line starting with `POT-Creation-Date: ` or `PO-Revision-Date: ` holds a date,
 //! `YYYY-MM-DD HH:MM±hhmm` and nothing else to the end of the line; a date later than
 //! the timestamp is replaced with the timestamp, in UTC, in place (the same length, so
-//! no offset moves). Catalogs of another major revision than 0, or whose tables do not
-//! fit in the file, are left alone.
+//! no offset moves: a timestamp before the year 1000 leaves it). Catalogs whose
+//! revision, shifted right by 8 bits, is above 1 (as strip-nondeterminism reads the
+//! major revision), or whose tables do not fit in the file, are left alone.
 
 use crate::time::{Utc, days_from_civil};
 
@@ -26,7 +27,7 @@ fn header(data: &[u8]) -> Option<(usize, usize)> {
         [0x95, 0x04, 0x12, 0xde] => true,
         _ => return None,
     };
-    if word(data, 4, big)? >> 16 != 0 {
+    if word(data, 4, big)? >> 8 > 1 {
         return None;
     }
     let n = word(data, 8, big)?;
@@ -105,9 +106,14 @@ pub fn normalize(data: &[u8], time: i64) -> Option<Vec<u8>> {
     }
     let u = Utc::from_unix(time);
     let new = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}+0000",
+        "{}-{:02}-{:02} {:02}:{:02}+0000",
         u.year, u.month, u.day, u.hour, u.minute
     );
+    // as strip-nondeterminism, a date of another length (a year before 1000) is not
+    // written
+    if new.len() != value.len() {
+        return None;
+    }
     let at = start.saturating_add(value_start);
     let mut out = data.to_vec();
     out.get_mut(at..at.saturating_add(new.len()))?

@@ -1,11 +1,11 @@
 //! gzip (RFC 1952): the header of the first member.
 //!
-//! A non-zero MTIME becomes the timestamp (zero, "no time", stays), the original file
-//! name (FNAME) and the header CRC (FHCRC) are dropped with their flags; FTEXT, FEXTRA,
-//! FCOMMENT, XFL, OS and the reserved flag bits stay as they are. The compressed data,
-//! the trailer and anything after the first member are copied unchanged. A file too
-//! short for a header, or without the gzip magic, is left alone; a header field that
-//! runs past the end of the file is an error.
+//! A non-zero MTIME becomes the timestamp modulo 2^32 (zero, "no time", stays), the
+//! original file name (FNAME) and the header CRC (FHCRC) are dropped with their flags;
+//! FTEXT, FEXTRA, FCOMMENT, XFL, OS and the reserved flag bits stay as they are. The
+//! compressed data, the trailer and anything after the first member are copied
+//! unchanged. A file too short for a header, or without the gzip magic, is left alone;
+//! a header field that runs past the end of the file is an error.
 
 use crate::{Error, Result};
 
@@ -15,7 +15,7 @@ const FNAME: u8 = 0x08;
 const FCOMMENT: u8 = 0x10;
 
 fn malformed() -> Error {
-    Error::Malformed("Malformed gzip file".to_owned())
+    Error::malformed("Malformed gzip file")
 }
 
 /// The index just past the NUL ending the string at `pos`.

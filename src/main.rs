@@ -65,31 +65,48 @@ struct StageArgs {
 #[derive(Args)]
 #[allow(clippy::struct_excessive_bools)] // its flags
 struct StripArgs {
-    /// Set the timestamps to SECONDS since the epoch
-    #[arg(short = 'T', long, value_name = "SECONDS", value_parser = clap::value_parser!(i64).range(0..))]
-    timestamp: Option<i64>,
+    /// Set the timestamps to SECONDS since the epoch (an integer, negative ones too)
+    #[arg(
+        short = 'T',
+        long,
+        value_name = "SECONDS",
+        allow_hyphen_values = true,
+        overrides_with = "timestamp"
+    )]
+    timestamp: Option<String>,
     /// Use this handler (gzip, zip, jar, png, gettext, javadoc...) instead of detecting
-    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    #[arg(
+        short = 't',
+        long = "type",
+        value_name = "TYPE",
+        overrides_with = "kind"
+    )]
     kind: Option<String>,
     /// Only replace later timestamps (the real tool's)
     #[arg(long)]
     clamp_timestamp: bool,
-    /// Enable or disable handlers, +NAME,-NAME,+all,-all (the real tool's)
-    #[arg(long, value_name = "SPEC")]
+    /// Enable or disable handlers, +NAME,-NAME,+all,-all, left to right from the default
+    /// set (every handler but ar); the last --normalizers counts
+    #[arg(
+        long,
+        value_name = "SPEC",
+        overrides_with = "normalizers",
+        allow_hyphen_values = true
+    )]
     normalizers: Option<String>,
     /// Name each file normalized
     #[arg(short, long)]
     verbose: bool,
-    /// Leave the files the native handlers do not cover as they are, instead of
-    /// passing them to the real strip-nondeterminism
-    #[arg(long)]
-    native_only: bool,
     /// Also normalize Python bytecode as add-determinism does: the .pyc files, and
     /// those under the directories given
     #[arg(long)]
     pyc: bool,
-    /// The files (and, with --pyc, directories)
-    #[arg(required = true, value_name = "FILE")]
+    /// Leave alone the files whose name (not path) matches this shell glob (`*`, `?`,
+    /// `[...]`), whether given or found under a directory; repeatable
+    #[arg(long, value_name = "PATTERN")]
+    exclude: Vec<String>,
+    /// The files, and directories whose files are all normalized
+    #[arg(required = true, value_name = "PATH")]
     files: Vec<PathBuf>,
 }
 
@@ -213,18 +230,34 @@ enum Cmd {
 const STRIP_ABOUT: &str = "Normalize timestamps and build details out of files, as \
 strip-nondeterminism does, byte for byte.
 
-Natively, with --timestamp, for gzip, zip and the \
-formats strip-nondeterminism handles as zip (.xpi, .whl, .epub...), jar (.jar, .war, \
-.apk...), PNG, gettext .mo and javadoc HTML; a file is detected as strip-nondeterminism \
-detects it, by its name and file(1). The other files it handles go to the real \
-strip-nondeterminism when it is installed (unless --native-only), as does the whole run \
-without --timestamp or with --clamp-timestamp or --normalizers.
+Natively, with --timestamp, for every format strip-nondeterminism handles: gzip, zip \
+and the formats it handles as zip (.xpi, .whl, .epub..., Zip64 included), jar (.jar, \
+.war, .apk...), Java modules, Python zip applications, PNG, gettext .mo, javadoc HTML, \
+cpio, U-Boot images, bFLT executables and ar (when enabled); a file is detected as \
+strip-nondeterminism detects it, by its name, content and file(1). Without \
+--timestamp, or with --clamp-timestamp, the run is the real strip-nondeterminism's. \
+--normalizers enables and disables handlers as for strip-nondeterminism: from the \
+default set (all but ar), +NAME and -NAME items applied left to right, `all` naming \
+every handler; -t takes only an enabled one. Both are checked before any file.
+
+Operands are files and directories. With --timestamp, a directory's regular files are \
+all normalized as files given are (strip-nondeterminism skips directories), symbolic \
+links not followed; a file reached through several operands or names (hard links) is \
+processed each time. Without it, only the .pyc files under a directory are (with \
+--pyc). -t takes files only (a directory is an error, status 2). A symbolic link \
+given is followed only with -t, and a missing operand stops the run there, as for \
+strip-nondeterminism. --exclude PATTERN (repeatable) leaves alone the files whose \
+name, not path, matches the shell glob PATTERN (`*`, `?`, `[...]`, `\\` quoting), \
+whether given or found under a directory.
 
 --pyc (or DEBBUILD_RS_STRIP_PYC set) adds Python bytecode, which strip-nondeterminism \
-leaves alone: the .pyc files among the operands, and those under directory operands \
-(their other files are not looked at), are normalized as add-determinism 0.7.3 does, \
-before and whatever the other options. A file it cannot process is left as it is, with a \
+leaves alone: the .pyc files, given or found, are normalized as add-determinism 0.7.3 \
+does, whatever the other options. A file it cannot process is left as it is, with a \
 warning; one too short for a magic number makes the run fail, after the others.
+
+`debbuild-rs strip-nondeterminism --pyc --normalizers=+ar -T \"$SOURCE_DATE_EPOCH\" \
+[--exclude GLOB]... DIR...` replaces add-determinism DIR...: the same .pyc files, and \
+ar, gzip, jar, javadoc and zip files as strip-nondeterminism normalizes them.
 
 `dh_strip_nondeterminism` as the name of this binary runs debhelper's helper natively; \
 `debbuild-rs stage` puts it in the PATH of debian/rules. With DEBBUILD_RS_STRIP_PYC set, \
@@ -407,15 +440,28 @@ fn pack(destdir: PathBuf, epoch: Option<u64>, staged: Vec<PathBuf>) -> ExitCode 
 }
 
 fn strip_nondeterminism(a: StripArgs) -> ExitCode {
+    // an integer, as strip-nondeterminism takes it: an optional sign, then digits;
+    // strip-nondeterminism names the option as it was typed (T or timestamp), this
+    // always T
+    let timestamp = match a.timestamp.as_deref().map(str::parse::<i64>) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(_)) => {
+            eprintln!(
+                "Value \"{}\" invalid for option T (number expected)",
+                a.timestamp.unwrap_or_default()
+            );
+            return status(255);
+        }
+    };
     status(debbuild_rs_strip::cli::run(&debbuild_rs_strip::cli::Args {
-        timestamp: a.timestamp,
+        timestamp,
         kind: a.kind,
         clamp_timestamp: a.clamp_timestamp,
         normalizers: a.normalizers,
         verbose: a.verbose,
-        native_only: a.native_only
-            || debbuild_rs_strip::dh::env_set(debbuild_rs_strip::dh::NATIVE_ONLY),
         pyc: a.pyc || debbuild_rs_strip::dh::env_set(debbuild_rs_strip::dh::PYC),
+        exclude: a.exclude,
         files: a.files,
     }))
 }

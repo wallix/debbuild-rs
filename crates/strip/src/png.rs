@@ -6,6 +6,10 @@
 //! chunk is copied as it is, CRC included; compressed text chunks (`zTXt`, `iTXt`) are
 //! not looked into. Chunks after `IEND`, and bytes that do not make a whole chunk, are
 //! copied unchanged.
+//!
+//! Differences from strip-nondeterminism, bugs of its handler: the bytes of a partial
+//! chunk header at the end of the file are kept, where it loses them; a `tIME` or date
+//! text chunk of 4092 bytes or more is normalized, where it is copied unexamined.
 
 use flate2::Crc;
 
@@ -27,11 +31,18 @@ fn date_keyword(key: &[u8]) -> bool {
     key == b"Creation Time" || key.strip_prefix(b"date:").is_some_and(|k| !k.is_empty())
 }
 
+const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// Whether `data` starts with the PNG signature.
+#[must_use]
+pub fn is_png(data: &[u8]) -> bool {
+    data.starts_with(SIG)
+}
+
 /// The normalized file, or `None` when nothing changes.
 #[must_use]
 pub fn normalize(data: &[u8], time: i64) -> Option<Vec<u8>> {
-    const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
-    if !data.starts_with(SIG) {
+    if !is_png(data) {
         return None;
     }
     let utc = Utc::from_unix(time);
@@ -55,7 +66,8 @@ pub fn normalize(data: &[u8], time: i64) -> Option<Vec<u8>> {
         };
         match &kind {
             b"tIME" => {
-                let year = u16::try_from(utc.year).unwrap_or(0).to_be_bytes();
+                // modulo 2^16, as strip-nondeterminism writes it
+                let year = u16::try_from(utc.year & 0xffff).unwrap_or(0).to_be_bytes();
                 let small = |n: u32| u8::try_from(n).unwrap_or(0);
                 chunk(
                     &mut out,
@@ -82,7 +94,7 @@ pub fn normalize(data: &[u8], time: i64) -> Option<Vec<u8>> {
                 text.push(0);
                 text.extend_from_slice(
                     format!(
-                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}-00:00",
+                        "{}-{:02}-{:02}T{:02}:{:02}:{:02}-00:00",
                         utc.year, utc.month, utc.day, utc.hour, utc.minute, utc.second
                     )
                     .as_bytes(),
@@ -145,5 +157,14 @@ mod tests {
         let mut input = png(&[(b"IEND", b"")]);
         chunk(&mut input, *b"tIME", b"\x07\xee\x01\x02\x03\x04\x05");
         assert_eq!(normalize(&input, T), None);
+    }
+
+    /// strip-nondeterminism loses the bytes of a partial chunk header at the end of a
+    /// file it rewrites: a bug, not reproduced.
+    #[test]
+    fn partial_chunk_kept() {
+        let mut input = png(&[(b"tIME", b"\x07\xee\x01\x02\x03\x04\x05")]);
+        input.extend_from_slice(b"\0\0\0");
+        assert!(normalize(&input, T).unwrap().ends_with(b"\0\0\0"));
     }
 }

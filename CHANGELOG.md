@@ -3,6 +3,51 @@
 Each release has a `## vX.Y.Z - YYYY-MM-DD` section: the release workflow requires it and
 publishes it as the release notes. Changes waiting for a release go under `## Unreleased`.
 
+## Unreleased
+
+Breaking:
+
+- `DEBBUILD_RS_STRIP_NATIVE_ONLY` and `strip-nondeterminism --native-only` are gone:
+  a format without a native handler no longer falls back to the real tools.
+- `strip-nondeterminism -T`: a malformed file ends the run with strip-nondeterminism's
+  exit status (255, or another one for some files, such as 25 for a zip archive too
+  short), where it was 1.
+- `strip-nondeterminism --pyc DIR` with `-T` normalizes the other files under DIR too,
+  as strip-nondeterminism would if it walked directories; without `-T` it still takes
+  only the .pyc files.
+
+Changes:
+
+- `stage`, `strip-nondeterminism`: every format strip-nondeterminism normalizes is
+  native: ar archives (off by default, as there), U-Boot legacy images, bFLT
+  executables, Java modules, Python zip applications, cpio archives (odc, newc,
+  binary) and Zip64 archives join gzip, zip, jar, PNG, gettext and javadoc.
+  `dh_strip_nondeterminism` no longer runs debhelper's helper; `strip-nondeterminism`
+  runs the real tool only without `-T` or with `--clamp-timestamp`.
+- `stage`, `strip-nondeterminism`: the existing handlers match strip-nondeterminism
+  on more inputs: zip archives read from their end record (prepended data, Zip64,
+  unreadable members left alone), directory entries from their local header, empty
+  members written stored, extra fields, `.pk3`/`.zhfst`/`.codadef` names; jar
+  manifests' `Built-By:` lines, signed jars and javac leftovers; gettext revisions,
+  javadoc `<html lang>` lines; timestamps out of a field's range.
+- `stage`, `strip-nondeterminism`: where strip-nondeterminism has a bug, the correct
+  behaviour is kept and listed in the README ("Differences from strip-nondeterminism"):
+  failing files are left as they were, fields too small for the timestamp fail the
+  file, malformed zip extra fields keep their bytes, large PNG date chunks are
+  normalized, jar members named `0` are kept, among others.
+- `stage`, `strip-nondeterminism`: a file reached twice (given twice, under two hard
+  links, through overlapping directories) is read again only after its first write
+  finishes, preventing truncation. A handler panic fails the run. Nested jars are
+  normalized up to 32 levels deep; deeper nesting fails the archive.
+- `strip-nondeterminism`: `--normalizers` is native, with strip-nondeterminism's
+  semantics and errors (`+ar` enables the ar handler), checked with `-t` before any
+  operand; `-T` takes negative timestamps.
+- `strip-nondeterminism -T`: directory operands are walked, every regular file going
+  through detection under each of its names, symbolic links not followed (`-t` with a
+  directory is an error); `--exclude GLOB` (repeatable, matched against file names)
+  leaves files alone. `--pyc --normalizers=+ar -T "$SOURCE_DATE_EPOCH" DIR` replaces
+  `add-determinism DIR`.
+
 ## v0.1.0 - 2026-10-19
 
 First release.

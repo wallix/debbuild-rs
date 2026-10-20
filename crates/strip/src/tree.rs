@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::{
-    Kind, Result, Target, by_name, confirms, confirms_magic, io_err, is_pyc_name, javadoc,
+    Kind, Normalizers, Result, Target, by_name, confirms, confirms_magic, io_err, is_pyc_name,
+    javadoc, zip,
 };
 
 /// The first bytes of a file, enough for the magic numbers and the javadoc marker.
@@ -35,6 +36,7 @@ fn describe(paths: &[&Path]) -> Option<Vec<String>> {
         if !out.status.success() {
             return None;
         }
+        // only the descriptions (-b) are matched, never a path
         let text = String::from_utf8_lossy(&out.stdout);
         let lines: Vec<String> = text.lines().map(str::to_owned).collect();
         if lines.len() != chunk.len() {
@@ -46,17 +48,20 @@ fn describe(paths: &[&Path]) -> Option<Vec<String>> {
 }
 
 /// The handler of each target strip-nondeterminism would normalize, in order; the
-/// others are dropped. `forced` skips detection, as `strip-nondeterminism -t` does;
-/// with `pyc`, the files named `*.pyc` are Python bytecode, whatever their content.
+/// others are dropped, as are those whose handler is not `enabled`. `forced` skips
+/// detection, as `strip-nondeterminism -t` does; with `pyc`, the files named `*.pyc` are
+/// Python bytecode, whatever their content.
 pub fn classify(
     targets: Vec<Target>,
     forced: Option<Kind>,
     pyc: bool,
+    enabled: Normalizers,
 ) -> Result<Vec<(Target, Kind)>> {
     if let Some(kind) = forced {
         return Ok(targets.into_iter().map(|t| (t, kind)).collect());
     }
-    // (target, handler, first bytes) of the files whose name or content asks for one
+    // (target, handler, the one its name asks for if the first is not confirmed, first
+    // bytes) of the files whose name or content asks for one
     let mut candidates = Vec::new();
     for t in targets {
         let name = t
@@ -65,50 +70,49 @@ pub fn classify(
             .map(OsStrExt::as_bytes)
             .unwrap_or_default();
         if pyc && is_pyc_name(name) {
-            candidates.push((t, Kind::Pyc, Vec::new()));
+            candidates.push((t, Kind::Pyc, None, Vec::new()));
             continue;
         }
-        let kind = by_name(name);
-        if let Some(k) = kind
-            && !k.native()
-        {
-            // the real tool checks the content of these itself
-            candidates.push((t, k, Vec::new()));
-            continue;
-        }
+        let kind = by_name(name).filter(|k| enabled.contains(*k));
         let head = head(&t.path)?;
-        // a Python zip application, whatever its name: a `#!` line, then a zip archive
-        let pyzip = head.starts_with(b"#!")
-            && fs::read(&t.path)
-                .map_err(|e| io_err(&t.path, &e))?
-                .windows(4)
-                .any(|w| w == b"PK\x03\x04");
         let kind = match kind {
-            _ if pyzip => Kind::Pyzip,
-            Some(Kind::Javadoc) if !javadoc::detect(&head) => continue,
-            Some(k) => k,
+            Some(Kind::Javadoc) if !javadoc::detect(&head) => None,
+            k => k,
+        };
+        // a Python zip application, whatever its name, before what the name asks for
+        let (kind, fallback) = match kind {
+            _ if enabled.contains(Kind::Pyzip) && zip::is_pyzip(&head) => (Kind::Pyzip, kind),
+            Some(k) => (k, None),
             None => continue,
         };
-        candidates.push((t, kind, head));
+        candidates.push((t, kind, fallback, head));
     }
     let checked: Vec<&Path> = candidates
         .iter()
-        .filter(|(_, k, _)| needs_file(*k))
-        .map(|(t, _, _)| t.path.as_path())
+        .filter(|(_, k, f, _)| needs_file(*k) || f.is_some_and(needs_file))
+        .map(|(t, _, _, _)| t.path.as_path())
         .collect();
     let mut descriptions = describe(&checked).map(Vec::into_iter);
     let mut out = Vec::with_capacity(candidates.len());
-    for (t, kind, head) in candidates {
-        let keep = if needs_file(kind) {
-            match descriptions.as_mut().and_then(Iterator::next) {
-                Some(d) => confirms(kind, &d),
-                None => confirms_magic(kind, &head),
-            }
+    for (t, kind, fallback, head) in candidates {
+        let description = if needs_file(kind) || fallback.is_some_and(needs_file) {
+            descriptions.as_mut().and_then(Iterator::next)
         } else {
-            true
+            None
         };
-        if keep {
-            out.push((t, kind));
+        let confirmed = |k: Kind| {
+            !needs_file(k)
+                || match &description {
+                    Some(d) => confirms(k, d),
+                    None => confirms_magic(k, &head),
+                }
+        };
+        if let Some(k) = [Some(kind), fallback]
+            .into_iter()
+            .flatten()
+            .find(|&k| confirmed(k))
+        {
+            out.push((t, k));
         }
     }
     Ok(out)
@@ -117,7 +121,14 @@ pub fn classify(
 fn needs_file(kind: Kind) -> bool {
     matches!(
         kind,
-        Kind::Gzip | Kind::Zip | Kind::Jar | Kind::Png | Kind::Gettext | Kind::Pyzip
+        Kind::Ar
+            | Kind::Cpio
+            | Kind::Gzip
+            | Kind::Zip
+            | Kind::Jar
+            | Kind::Png
+            | Kind::Gettext
+            | Kind::Pyzip
     )
 }
 
@@ -140,18 +151,17 @@ pub fn write(path: &Path, data: &[u8], replace: bool) -> Result<()> {
         .tempfile_in(dir)
         .map_err(|e| io_err(dir, &e))?;
     tmp.write_all(data).map_err(|e| io_err(tmp.path(), &e))?;
+    // set here, not at creation, where the umask would clear bits of it
     fs::set_permissions(tmp.path(), fs::Permissions::from_mode(mode & 0o7777))
         .map_err(|e| io_err(tmp.path(), &e))?;
     tmp.persist(path).map_err(|e| io_err(path, &e.error))?;
     Ok(())
 }
 
-/// The regular files under `root`, in directory order, each inode once (the first of
-/// its names), with the name they are reported under: `display` joined with the path
-/// below `root`.
-pub fn walk(root: &Path, display: &str) -> Result<Vec<Target>> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
+/// The regular files under `root` into `out`, in directory order, every name of each
+/// inode, with the name they are reported under: `display` joined with the path below
+/// `root`.
+pub fn walk(root: &Path, display: &str, out: &mut Vec<Target>) -> Result<()> {
     let mut stack = vec![(root.to_path_buf(), display.to_owned())];
     while let Some((dir, shown)) = stack.pop() {
         let mut subdirs: Vec<(PathBuf, String)> = Vec::new();
@@ -163,8 +173,7 @@ pub fn walk(root: &Path, display: &str) -> Result<Vec<Target>> {
             let meta = fs::symlink_metadata(&path).map_err(|e| io_err(&path, &e))?;
             if meta.is_dir() {
                 subdirs.push((path, shown));
-            } else if meta.is_file() && (meta.nlink() == 1 || seen.insert((meta.dev(), meta.ino())))
-            {
+            } else if meta.is_file() {
                 out.push(Target {
                     path,
                     display: shown,
@@ -173,5 +182,5 @@ pub fn walk(root: &Path, display: &str) -> Result<Vec<Target>> {
         }
         stack.extend(subdirs.into_iter().rev());
     }
-    Ok(out)
+    Ok(())
 }

@@ -42,7 +42,8 @@ development root.
 | `debbuild-rs diff-stage [--install] A B` | Validates two staged trees and lists every difference that would change the `.deb` files `pack` makes of them, or with `--install` the files `install` leaves. |
 | `debbuild-rs inspect STAGED` | Validates staged trees and lists their packages: version, architecture, compression, epoch, relationships. |
 | `debbuild-rs strip-nondeterminism -T SECONDS FILE...` | Normalizes the timestamps and build details of files as Debian's strip-nondeterminism does, byte for byte. |
-| `debbuild-rs strip-nondeterminism --pyc PATH...` | Normalizes Python bytecode (.pyc files, and those under directories) as add-determinism does, byte for byte. |
+| `debbuild-rs strip-nondeterminism --pyc PATH...` | Also normalizes Python bytecode (.pyc files, and those under directories) as add-determinism does, byte for byte. |
+| `debbuild-rs strip-nondeterminism -T SECONDS [--exclude GLOB]... DIR...` | Normalizes every regular file under directories, except those whose name matches a glob. |
 
 `debbuild-rs <command> --help` documents each one, including where it differs from the
 Debian tool it stands in for.
@@ -59,22 +60,85 @@ else the changelog date; each staged tree records it, and `pack` uses it.
 
 Under `stage`, debian/rules runs `debbuild-rs` as `dh_strip_nondeterminism`: the same
 packages, files, `-X` exclusions and timestamp (the changelog date) as debhelper's, and
-the same output, from native handlers for gzip, zip (and `.whl`, `.epub`, `.xpi`...),
-jar (and `.war`, `.apk`...), PNG, gettext `.mo` and javadoc HTML, picked as
-strip-nondeterminism picks them, by file name and file(1). The files it does not cover
-natively (Java modules, Python zip applications, cpio, U-Boot and bFLT images, Zip64
-archives) go through debhelper's `dh_strip_nondeterminism` on copies, or are left as they are, with a note, when it is not
-installed or `DEBBUILD_RS_STRIP_NATIVE_ONLY` is set. `debbuild-rs strip-nondeterminism`
-is the same on strip-nondeterminism's command line.
+the same output, from native handlers for every format strip-nondeterminism normalizes:
+gzip, zip (and `.whl`, `.epub`, `.pk3`..., Zip64 included), jar (and `.war`, `.apk`...),
+Java modules, Python zip applications, PNG, gettext `.mo`, javadoc HTML, cpio archives,
+U-Boot images, bFLT executables, and ar archives (off by default, as there), picked as
+strip-nondeterminism picks them, by file name, content and file(1); neither
+strip-nondeterminism nor debhelper's helper is run. `debbuild-rs strip-nondeterminism`
+is the same on strip-nondeterminism's command line, where `-T` is needed (without it, or
+with `--clamp-timestamp`, the run is strip-nondeterminism's).
 
 The handlers were written from the format specifications (RFC 1952, the zip APPNOTE,
-PNG, the GNU gettext catalog format) and from running strip-nondeterminism 1.13 (Debian
-12) and 1.14 (Debian 13) on crafted files; `tests/strip.rs` keeps comparing the two.
-One difference is deliberate: a deflated jar member whose content is rewritten (the
-manifest, a javadoc page, a nested jar) is compressed again with flate2, where
-strip-nondeterminism uses zlib. Such a jar holds the same members, metadata and contents
-as strip-nondeterminism's, but different compressed bytes for those members; the tests
-compare them by content.
+PNG, the GNU gettext catalog format, cpio(5), the U-Boot legacy image and bFLT headers,
+the JDK's jmod and Python's zipapp documentation) and from running strip-nondeterminism
+1.13 (Debian 12) and 1.14 (Debian 13) on crafted files; `tests/strip.rs` keeps comparing
+the two.
+
+#### Differences from strip-nondeterminism
+
+The output is strip-nondeterminism's for every well-formed file, but for the compressed
+bytes of rewritten jar members (below). Where its handlers have a bug, debbuild-rs does
+the right thing instead, and a few details of the interface differ; `tests/strip.rs` and the handlers' unit tests check these behaviours on their
+own:
+
+- zip, jar: a deflated jar member whose content is rewritten (the manifest, a javadoc
+  page, a nested jar) is compressed again with flate2, where strip-nondeterminism uses
+  zlib. Such a jar holds the same members, metadata and contents as
+  strip-nondeterminism's, but different compressed bytes for those members; the tests
+  compare them by content.
+- zip, jar: archives are replaced through a temporary file, where strip-nondeterminism
+  moves the original to a `.zbk` backup next to it, overwriting and deleting any file
+  of that name.
+- zip, jar: bytes of an extra field block that do not make a whole field (a stray
+  byte, a field running past the end of the block) are kept as they are, where
+  strip-nondeterminism drops them, or every field of the header.
+- zip, jar: an extended timestamp field of another length than 1 + 4n gets the
+  timestamp in each whole slot, its last bytes kept, where strip-nondeterminism writes
+  past them; an NTFS attribute of size 0 is stepped over, where strip-nondeterminism
+  hangs; an Info-ZIP Unix field whose uid and gid sizes do not add up to its length is
+  kept as it is, where strip-nondeterminism writes it again from those sizes under its
+  old length.
+- jar: a member named `0` is kept, which strip-nondeterminism drops along with javac's
+  leftovers.
+- jar: jars in jars are normalized up to 32 deep; a jar nested deeper fails the
+  outermost archive, where strip-nondeterminism has no limit.
+- ar: an archive that fails (a malformed header after good ones) is left as it is,
+  where strip-nondeterminism leaves the headers before the failure rewritten; a
+  timestamp too long for the 12-digit mtime field fails the file, where it overwrites
+  the fields after it.
+- cpio: a timestamp the mtime field of the archive's format cannot hold (negative, or
+  too large) fails the file, where strip-nondeterminism lets it overwrite the fields
+  after it, or wraps it around; an archive with a name that, given back its NUL, no
+  longer fits its namesize field is left alone.
+- PNG: the bytes of a partial chunk header at the end of the file are kept, where
+  strip-nondeterminism loses them; a `tIME` or date text chunk of 4092 bytes or more is
+  normalized, where strip-nondeterminism copies it unexamined.
+- A timestamp before the year 1 gives javadoc, gettext and PNG dates in the proleptic
+  Gregorian calendar, where strip-nondeterminism writes wrong dates.
+- Detection matches file(1)'s description of a file, not its whole output line, which
+  starts with the file's path: a name such as `gzip compressed data.gz` does not make a
+  text file a gzip one.
+- With the pyzip handler disabled (`--normalizers=-pyzip`, `-all`...), a file no other
+  handler takes is left alone, where strip-nondeterminism dies.
+- `strip-nondeterminism` prints what it normalized as neither release does (1.13 prints
+  `Normalizing FILE` with `-v` for each file it handles; 1.14 prints `Normalized FILE`
+  for each file it rewrites, and `Calling normalizer for FILE` before with `-v`): with
+  `-v`, `Normalized FILE (HANDLER)` on stderr for each file it rewrote, otherwise
+  nothing.
+- `strip-nondeterminism -t` with a directory operand is an error (exit status 2), where
+  strip-nondeterminism tries the handler on the directory itself.
+- `strip-nondeterminism -T` takes an integer of 64 bits, negative ones included, and
+  refuses a larger one (exit status 255), which strip-nondeterminism takes in floating
+  point. The error for a value that is not a number names the option `T`, however it
+  was spelled.
+- A failed system call (reading or writing a file) ends `strip-nondeterminism` with
+  exit status 1, where strip-nondeterminism's status depends on the error.
+- `dh_strip_nondeterminism -v` prints `Normalized FILE (HANDLER)` for each file it
+  rewrote, where debhelper's helper (Debian 12 and 13) prints `Using TIMESTAMP as
+  canonical time`, then `Normalizing FILE using
+  File::StripNondeterminism::handlers::HANDLER` for each file a handler takes,
+  rewritten or not.
 
 ### Python bytecode
 
@@ -90,13 +154,27 @@ reads Python 3.0 to 3.16 files; it leaves Python 2 files, and those it cannot re
 - `debbuild-rs strip-nondeterminism --pyc PATH...` normalizes the .pyc files among the
   PATHs and under the directories among them, then handles the other files as without
   `--pyc`.
+- With `-T`, directory operands are walked: each regular file, symbolic links not
+  followed, goes through detection as files given do; a file reached through several
+  operands or names (hard links) is processed each time. Without `-T`, only the .pyc
+  files under them are taken, as strip-nondeterminism skips directories. With `-t`,
+  which forces a handler on the files named, a directory operand is an error (exit
+  status 2). `--exclude GLOB` (repeatable, a shell glob: `*`, `?`, `[...]`) leaves
+  alone the files whose name matches it.
 - Under `stage`, `dh_strip_nondeterminism` normalizes the .pyc files of the package trees
   too when `DEBBUILD_RS_STRIP_PYC` is set (non-empty), as in
   `export DEBBUILD_RS_STRIP_PYC = 1` in debian/rules. Debhelper's helper ignores it.
 
-For a build that runs `add-determinism DIR` for its .pyc files,
-`debbuild-rs strip-nondeterminism --pyc DIR` is the replacement. It covers
-add-determinism's pyc handler only, not its ar, gzip, jar, javadoc and zip handlers.
+For a build that runs `add-determinism DIR`, the replacement is
+
+```sh
+debbuild-rs strip-nondeterminism --pyc --normalizers=+ar -T "$SOURCE_DATE_EPOCH" \
+  [--exclude GLOB]... DIR...
+```
+
+This applies add-determinism's pyc normalization and strip-nondeterminism's
+handlers to every file under the directories. It covers add-determinism's ar, gzip,
+jar, javadoc and zip formats, plus the other formats strip-nondeterminism handles.
 
 The handler was written from the marshal format (CPython's documentation and
 Python/marshal.c) and from running add-determinism on the files Python 3.11 (Debian 12)

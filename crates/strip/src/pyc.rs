@@ -117,7 +117,7 @@ fn layout(minor: u8) -> Layout {
 }
 
 fn malformed(msg: impl Into<String>) -> Error {
-    Error::Malformed(msg.into())
+    Error::malformed(msg)
 }
 
 /// A value of the stream, children by their [`Id`]: equal values are one. Bytes are
@@ -590,9 +590,9 @@ pub fn prepare(path: &Path, warn: &mut dyn FnMut(String)) -> Result<Prepared> {
         )));
     }
     match normalize(&data, warn) {
-        Ok(Some(new)) => Ok(Prepared::Rewrite(new, meta)),
-        Ok(None) => Ok(Prepared::Unchanged),
-        Err(Error::Malformed(m)) => Ok(Prepared::Skipped(m)),
+        Ok(Some(new)) if new != data => Ok(Prepared::Rewrite(new, meta)),
+        Ok(_) => Ok(Prepared::Unchanged),
+        Err(Error::Malformed(m, _)) => Ok(Prepared::Skipped(m)),
         Err(e) => Err(e),
     }
 }
@@ -806,7 +806,7 @@ mod tests {
             b"f\x030.0",
             b"a\xff\xff\xff\xff",
         ] {
-            assert!(matches!(norm(bad), Err(Error::Malformed(_))), "{bad:?}");
+            assert!(matches!(norm(bad), Err(Error::Malformed(..))), "{bad:?}");
         }
         // trailing bytes are dropped, with a warning
         let mut warnings = Vec::new();
